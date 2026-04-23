@@ -8,10 +8,13 @@ function mapUserRow(row, disabilities, preferences) {
         age: row.age,
         city: row.city,
         bio: row.bio,
+        avatarUrl: row.avatar_url,
         disabilities,
         accessibilityNeeds: row.accessibility_needs,
         minPreferredAge: preferences?.min_preferred_age ?? 18,
         maxPreferredAge: preferences?.max_preferred_age ?? 99,
+        preferredCity: preferences?.preferred_city ?? null,
+        sameCityOnly: preferences?.same_city_only ?? false,
     };
 }
 async function getDisabilitiesForUser(userId) {
@@ -79,17 +82,20 @@ export async function createUser(payload) {
     const city = payload.city ?? '';
     const bio = payload.bio ?? '';
     const accessibilityNeeds = payload.accessibilityNeeds ?? '';
+    const avatarUrl = payload.avatarUrl ?? null;
     const disabilities = (payload.disabilities?.length ? payload.disabilities : ['other']);
     const minPreferredAge = payload.minPreferredAge ?? 22;
     const maxPreferredAge = payload.maxPreferredAge ?? 35;
+    const preferredCity = payload.preferredCity ?? city;
+    const sameCityOnly = payload.sameCityOnly ?? false;
     const { rows } = await pool.query(`
-      INSERT INTO users (email, password_hash, full_name, age, city, bio, accessibility_needs)
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      INSERT INTO users (email, password_hash, full_name, age, city, bio, accessibility_needs, avatar_url)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
       RETURNING *
-    `, [payload.email.trim(), hashedPassword, payload.fullName.trim(), age, city, bio, accessibilityNeeds]);
+    `, [payload.email.trim(), hashedPassword, payload.fullName.trim(), age, city, bio, accessibilityNeeds, avatarUrl]);
     const user = rows[0];
     await saveDisabilities(user.id, disabilities);
-    await savePreferences(user.id, { minPreferredAge, maxPreferredAge, preferredCity: city, sameCityOnly: false });
+    await savePreferences(user.id, { minPreferredAge, maxPreferredAge, preferredCity, sameCityOnly });
     return getUserProfile(user.id);
 }
 export async function verifyPassword(userId, password) {
@@ -107,6 +113,7 @@ export async function updateUserProfile(userId, payload) {
         age: payload.age ?? current.age,
         city: payload.city ?? current.city,
         bio: payload.bio ?? current.bio,
+        avatarUrl: payload.avatarUrl ?? current.avatarUrl,
         accessibilityNeeds: payload.accessibilityNeeds ?? current.accessibilityNeeds,
         disabilities: payload.disabilities ?? current.disabilities,
         minPreferredAge: payload.minPreferredAge ?? current.minPreferredAge,
@@ -120,9 +127,10 @@ export async function updateUserProfile(userId, payload) {
           age = $3,
           city = $4,
           bio = $5,
-          accessibility_needs = $6
+          accessibility_needs = $6,
+          avatar_url = $7
       WHERE id = $1
-    `, [userId, merged.fullName, merged.age, merged.city, merged.bio, merged.accessibilityNeeds]);
+    `, [userId, merged.fullName, merged.age, merged.city, merged.bio, merged.accessibilityNeeds, merged.avatarUrl]);
     await saveDisabilities(userId, merged.disabilities);
     await savePreferences(userId, {
         minPreferredAge: merged.minPreferredAge,

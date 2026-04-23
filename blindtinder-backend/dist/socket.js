@@ -37,6 +37,17 @@ export function initRealtime(httpServer) {
                 socket.leave(`match:${matchId}`);
             }
         });
+        socket.on('match:typing', ({ matchId, isTyping }) => {
+            if (!matchId) {
+                return;
+            }
+            const typing = {
+                matchId,
+                userId,
+                isTyping: Boolean(isTyping),
+            };
+            io?.to(`match:${matchId}`).emit('match:typing', typing);
+        });
     });
     return io;
 }

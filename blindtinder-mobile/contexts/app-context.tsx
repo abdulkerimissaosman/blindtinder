@@ -37,10 +37,13 @@ export type UserProfile = {
   age: number;
   city: string;
   bio: string;
+  avatarUrl: string;
   disabilities: DisabilityTag[];
   accessibilityNeeds: string;
   minPreferredAge: number;
   maxPreferredAge: number;
+  preferredCity: string;
+  sameCityOnly: boolean;
 };
 
 export type SwipeAction = 'like' | 'pass';
@@ -73,6 +76,16 @@ type AuthInput = {
 
 type RegisterInput = AuthInput & {
   fullName: string;
+  age: string;
+  city: string;
+  bio: string;
+  avatarUrl: string;
+  accessibilityNeeds: string;
+  minPreferredAge: string;
+  maxPreferredAge: string;
+  preferredCity: string;
+  sameCityOnly: boolean;
+  disabilities: DisabilityTag[];
 };
 
 type ProfileInput = Pick<
@@ -81,10 +94,13 @@ type ProfileInput = Pick<
   | 'age'
   | 'city'
   | 'bio'
+  | 'avatarUrl'
   | 'disabilities'
   | 'accessibilityNeeds'
   | 'minPreferredAge'
   | 'maxPreferredAge'
+  | 'preferredCity'
+  | 'sameCityOnly'
 >;
 
 type AppContextValue = {
@@ -114,10 +130,13 @@ const initialUsers: UserProfile[] = [
     age: 26,
     city: 'Cairo',
     bio: 'Love poetry, coffee, and long conversations about life.',
+    avatarUrl: '',
     disabilities: ['hearing'],
     accessibilityNeeds: 'Prefer text chat before calls.',
     minPreferredAge: 24,
     maxPreferredAge: 35,
+    preferredCity: 'Cairo',
+    sameCityOnly: false,
   },
   {
     id: 'u2',
@@ -127,10 +146,13 @@ const initialUsers: UserProfile[] = [
     age: 29,
     city: 'Cairo',
     bio: 'Wheelchair user, software engineer, and board game fan.',
+    avatarUrl: '',
     disabilities: ['mobility'],
     accessibilityNeeds: 'Accessible meet-up locations only.',
     minPreferredAge: 23,
     maxPreferredAge: 34,
+    preferredCity: 'Cairo',
+    sameCityOnly: false,
   },
   {
     id: 'u3',
@@ -140,10 +162,13 @@ const initialUsers: UserProfile[] = [
     age: 27,
     city: 'Giza',
     bio: 'Designer and cat mom. Looking for meaningful connections.',
+    avatarUrl: '',
     disabilities: ['visual'],
     accessibilityNeeds: 'Needs high-contrast visual content.',
     minPreferredAge: 25,
     maxPreferredAge: 36,
+    preferredCity: 'Giza',
+    sameCityOnly: false,
   },
 ];
 
@@ -158,6 +183,17 @@ function normalizePair(a: string, b: string): [string, string] {
   return a < b ? [a, b] : [b, a];
 }
 
+function mergeMessageIntoMatch(match: Match, message: Message): Match {
+  if (match.messages.some((item) => item.id === message.id)) {
+    return match;
+  }
+
+  return {
+    ...match,
+    messages: [...match.messages, message],
+  };
+}
+
 function normalizeUserProfile(user: Partial<UserProfile> & { id: string; email: string; fullName: string }): UserProfile {
   return {
     id: user.id,
@@ -167,10 +203,13 @@ function normalizeUserProfile(user: Partial<UserProfile> & { id: string; email: 
     age: typeof user.age === 'number' ? user.age : 25,
     city: user.city ?? '',
     bio: user.bio ?? '',
+    avatarUrl: user.avatarUrl ?? '',
     disabilities: Array.isArray(user.disabilities) ? user.disabilities : ['other'],
     accessibilityNeeds: user.accessibilityNeeds ?? '',
     minPreferredAge: typeof user.minPreferredAge === 'number' ? user.minPreferredAge : 22,
     maxPreferredAge: typeof user.maxPreferredAge === 'number' ? user.maxPreferredAge : 35,
+    preferredCity: user.preferredCity ?? '',
+    sameCityOnly: typeof user.sameCityOnly === 'boolean' ? user.sameCityOnly : false,
   };
 }
 
@@ -268,20 +307,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
     const stopMessageCreated = onMessageCreated(({ matchId, message }) => {
       setMatches((prev) =>
-        prev.map((match) => {
-          if (match.id !== matchId) {
-            return match;
-          }
-
-          if (match.messages.some((item) => item.id === message.id)) {
-            return match;
-          }
-
-          return {
-            ...match,
-            messages: [...match.messages, message],
-          };
-        })
+        prev.map((match) => (match.id === matchId ? mergeMessageIntoMatch(match, message) : match))
       );
     });
 
@@ -354,10 +380,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return { ok: true };
   };
 
-  const register = async ({ email, password, fullName }: RegisterInput) => {
+  const register = async (payload: RegisterInput) => {
     if (isBackendConfigured()) {
       try {
-        const response = await postAuth<UserProfile>('/auth/register', { email, password, fullName });
+        const response = await postAuth<UserProfile>('/auth/register', payload);
         const token = response.token ?? response.data?.token ?? null;
         const user = response.user ?? response.data?.user ?? null;
 
@@ -391,16 +417,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
     const newUser: UserProfile = {
       id: makeId('u'),
-      email: email.trim(),
+      email: payload.email.trim(),
       password,
-      fullName: fullName.trim() || 'New User',
-      age: 25,
-      city: '',
-      bio: '',
-      disabilities: ['other'],
-      accessibilityNeeds: '',
-      minPreferredAge: 22,
-      maxPreferredAge: 35,
+      fullName: payload.fullName.trim() || 'New User',
+      age: Number(payload.age) || 25,
+      city: payload.city.trim(),
+      bio: payload.bio.trim(),
+      avatarUrl: payload.avatarUrl.trim(),
+      disabilities: payload.disabilities.length ? payload.disabilities : ['other'],
+      accessibilityNeeds: payload.accessibilityNeeds.trim(),
+      minPreferredAge: Number(payload.minPreferredAge) || 22,
+      maxPreferredAge: Number(payload.maxPreferredAge) || 35,
+      preferredCity: payload.preferredCity.trim(),
+      sameCityOnly: payload.sameCityOnly,
     };
 
     try {
@@ -590,14 +619,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       try {
         const savedMessage = await sendMatchMessage<Message>(sessionToken, matchId, { text });
         setMatches((prev) =>
-          prev.map((match) =>
-            match.id === matchId
-              ? {
-                  ...match,
-                  messages: [...match.messages, savedMessage],
-                }
-              : match
-          )
+          prev.map((match) => (match.id === matchId ? mergeMessageIntoMatch(match, savedMessage) : match))
         );
         return;
       } catch {

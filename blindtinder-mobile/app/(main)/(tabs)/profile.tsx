@@ -1,10 +1,12 @@
 import { router } from 'expo-router';
 import { useMemo, useState } from 'react';
 import {
+  Image,
   Pressable,
   SafeAreaView,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   View,
@@ -31,9 +33,12 @@ export default function ProfileScreen() {
       age: String(currentUser?.age ?? 25),
       city: currentUser?.city ?? '',
       bio: currentUser?.bio ?? '',
+      avatarUrl: currentUser?.avatarUrl ?? '',
       accessibilityNeeds: currentUser?.accessibilityNeeds ?? '',
       minPreferredAge: String(currentUser?.minPreferredAge ?? 22),
       maxPreferredAge: String(currentUser?.maxPreferredAge ?? 35),
+      preferredCity: currentUser?.preferredCity ?? '',
+      sameCityOnly: currentUser?.sameCityOnly ?? false,
       disabilities: currentUser?.disabilities ?? ['other'],
     }),
     [currentUser]
@@ -43,9 +48,12 @@ export default function ProfileScreen() {
   const [age, setAge] = useState(initial.age);
   const [city, setCity] = useState(initial.city);
   const [bio, setBio] = useState(initial.bio);
+  const [avatarUrl, setAvatarUrl] = useState(initial.avatarUrl);
   const [accessibilityNeeds, setAccessibilityNeeds] = useState(initial.accessibilityNeeds);
   const [minPreferredAge, setMinPreferredAge] = useState(initial.minPreferredAge);
   const [maxPreferredAge, setMaxPreferredAge] = useState(initial.maxPreferredAge);
+  const [preferredCity, setPreferredCity] = useState(initial.preferredCity);
+  const [sameCityOnly, setSameCityOnly] = useState(initial.sameCityOnly);
   const [disabilities, setDisabilities] = useState<DisabilityTag[]>(initial.disabilities);
   const [saved, setSaved] = useState('');
   const [isSaving, setIsSaving] = useState(false);
@@ -67,10 +75,13 @@ export default function ProfileScreen() {
         age: Number(age) || 18,
         city,
         bio,
+        avatarUrl,
         disabilities: disabilities.length ? disabilities : ['other'],
         accessibilityNeeds,
         minPreferredAge: Number(minPreferredAge) || 18,
         maxPreferredAge: Number(maxPreferredAge) || 99,
+        preferredCity,
+        sameCityOnly,
       });
       setSaved('Profile saved.');
     } finally {
@@ -92,12 +103,22 @@ export default function ProfileScreen() {
         <TextInput style={styles.input} placeholder="Age" keyboardType="number-pad" value={age} onChangeText={setAge} />
         <TextInput style={styles.input} placeholder="City" value={city} onChangeText={setCity} />
         <TextInput
+          style={styles.input}
+          placeholder="Picture URL"
+          autoCapitalize="none"
+          keyboardType="url"
+          value={avatarUrl}
+          onChangeText={setAvatarUrl}
+        />
+        <TextInput
           style={[styles.input, styles.multiline]}
           placeholder="Short bio"
           multiline
           value={bio}
           onChangeText={setBio}
         />
+
+        {avatarUrl ? <Image source={{ uri: avatarUrl }} style={styles.avatar} /> : null}
 
         <Text style={styles.sectionLabel}>Disabilities</Text>
         <View style={styles.tagsWrap}>
@@ -121,6 +142,21 @@ export default function ProfileScreen() {
           value={accessibilityNeeds}
           onChangeText={setAccessibilityNeeds}
         />
+
+        <TextInput
+          style={styles.input}
+          placeholder="Preferred city"
+          value={preferredCity}
+          onChangeText={setPreferredCity}
+        />
+
+        <View style={styles.switchRow}>
+          <View style={styles.switchCopy}>
+            <Text style={styles.switchLabel}>Same city only</Text>
+            <Text style={styles.switchHint}>Limit discovery to your preferred city only.</Text>
+          </View>
+          <Switch value={sameCityOnly} onValueChange={setSameCityOnly} />
+        </View>
 
         <View style={styles.row}>
           <TextInput
@@ -187,6 +223,13 @@ const styles = StyleSheet.create({
     minHeight: 80,
     textAlignVertical: 'top',
   },
+  avatar: {
+    width: '100%',
+    height: 220,
+    borderRadius: 16,
+    marginTop: 4,
+    backgroundColor: '#e6ecfb',
+  },
   row: {
     flexDirection: 'row',
     gap: 10,
@@ -216,6 +259,25 @@ const styles = StyleSheet.create({
   },
   tagTextSelected: {
     color: '#fff',
+  },
+  switchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 16,
+    paddingVertical: 4,
+  },
+  switchCopy: {
+    flex: 1,
+  },
+  switchLabel: {
+    fontWeight: '700',
+    color: '#24305f',
+  },
+  switchHint: {
+    marginTop: 2,
+    color: '#64729a',
+    fontSize: 13,
   },
   saved: {
     color: '#0e7a39',

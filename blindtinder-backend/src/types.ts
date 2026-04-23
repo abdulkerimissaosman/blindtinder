@@ -16,10 +16,13 @@ export type ApiUser = {
   age: number;
   city: string;
   bio: string;
+  avatarUrl: string | null;
   disabilities: DisabilityTag[];
   accessibilityNeeds: string;
   minPreferredAge: number;
   maxPreferredAge: number;
+  preferredCity: string | null;
+  sameCityOnly: boolean;
 };
 
 export type AuthenticatedRequest = {

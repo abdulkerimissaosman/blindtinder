@@ -13,7 +13,7 @@ export type BackendAuthResponse<TUser> = {
 
 export async function postAuth<TUser>(
   path: '/auth/login' | '/auth/register',
-  payload: Record<string, string>
+  payload: Record<string, unknown>
 ) {
   return apiRequest<BackendAuthResponse<TUser>>(path, {
     method: 'POST',

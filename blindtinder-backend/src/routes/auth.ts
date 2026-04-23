@@ -8,7 +8,21 @@ const router = Router();
 
 router.post('/register', async (req, res, next) => {
   try {
-    const { email, password, fullName, age, city, bio, disabilities, accessibilityNeeds, minPreferredAge, maxPreferredAge } = req.body ?? {};
+    const {
+      email,
+      password,
+      fullName,
+      age,
+      city,
+      bio,
+      avatarUrl,
+      disabilities,
+      accessibilityNeeds,
+      minPreferredAge,
+      maxPreferredAge,
+      preferredCity,
+      sameCityOnly,
+    } = req.body ?? {};
 
     if (!email || !password || !fullName) {
       return res.status(400).json({ message: 'email, password, and fullName are required' });
@@ -25,10 +39,13 @@ router.post('/register', async (req, res, next) => {
       age,
       city,
       bio,
+      avatarUrl,
       disabilities,
       accessibilityNeeds,
       minPreferredAge,
       maxPreferredAge,
+      preferredCity,
+      sameCityOnly,
     });
 
     if (!user) {
