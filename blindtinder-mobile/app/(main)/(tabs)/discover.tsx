@@ -1,19 +1,65 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Alert, Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
 
-import { useAppContext } from '@/contexts/app-context';
+import { UserProfile, useAppContext } from '@/contexts/app-context';
 
 export default function DiscoverScreen() {
   const { getDiscoveryUsers, swipe } = useAppContext();
-  const candidates = useMemo(() => getDiscoveryUsers(), [getDiscoveryUsers]);
+  const [candidates, setCandidates] = useState<UserProfile[]>([]);
   const [index, setIndex] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadCandidates = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const nextCandidates = await getDiscoveryUsers();
+      setCandidates(nextCandidates);
+      setIndex(0);
+    } catch (loadError) {
+      const message = loadError instanceof Error ? loadError.message : 'Could not load profiles.';
+      setError(message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    let active = true;
+
+    const load = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const nextCandidates = await getDiscoveryUsers();
+        if (!active) return;
+        setCandidates(nextCandidates);
+        setIndex(0);
+      } catch (loadError) {
+        if (!active) return;
+        const message = loadError instanceof Error ? loadError.message : 'Could not load profiles.';
+        setError(message);
+      }
+      if (!active) return;
+      setLoading(false);
+    };
+
+    void load();
+
+    return () => {
+      active = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const current = candidates[index];
+  const currentDisabilities = Array.isArray(current?.disabilities) ? current.disabilities : [];
 
-  const onAction = (action: 'like' | 'pass') => {
+  const onAction = async (action: 'like' | 'pass') => {
     if (!current) return;
 
-    const result = swipe(current.id, action);
+    const result = await swipe(current.id, action);
     if (result.newMatchId) {
       Alert.alert('It is a match!', `You matched with ${current.fullName}`);
     }
@@ -21,12 +67,34 @@ export default function DiscoverScreen() {
     setIndex((prev) => prev + 1);
   };
 
+  if (loading) {
+    return (
+      <SafeAreaView style={styles.safe}>
+        <View style={styles.emptyBox}>
+          <Text style={styles.emptyTitle}>Loading profiles...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   if (!current) {
     return (
       <SafeAreaView style={styles.safe}>
         <View style={styles.emptyBox}>
-          <Text style={styles.emptyTitle}>No more profiles right now.</Text>
-          <Text style={styles.emptyText}>Try again after new users sign up.</Text>
+          {error ? (
+            <>
+              <Text style={styles.emptyTitle}>Could not load profiles.</Text>
+              <Text style={styles.emptyText}>{error}</Text>
+              <Pressable style={styles.retryButton} onPress={() => void loadCandidates()}>
+                <Text style={styles.buttonText}>Try again</Text>
+              </Pressable>
+            </>
+          ) : (
+            <>
+              <Text style={styles.emptyTitle}>No more profiles right now.</Text>
+              <Text style={styles.emptyText}>Try again after new users sign up.</Text>
+            </>
+          )}
         </View>
       </SafeAreaView>
     );
@@ -42,7 +110,9 @@ export default function DiscoverScreen() {
         <Text style={styles.bio}>{current.bio || 'No bio yet.'}</Text>
 
         <Text style={styles.sectionLabel}>Disabilities</Text>
-        <Text style={styles.value}>{current.disabilities.join(', ')}</Text>
+        <Text style={styles.value}>
+          {currentDisabilities.length ? currentDisabilities.join(', ') : 'Not specified'}
+        </Text>
 
         <Text style={styles.sectionLabel}>Accessibility Needs</Text>
         <Text style={styles.value}>{current.accessibilityNeeds || 'None specified'}</Text>
@@ -132,5 +202,12 @@ const styles = StyleSheet.create({
   },
   emptyText: {
     color: '#4e5d8a',
+  },
+  retryButton: {
+    marginTop: 8,
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    backgroundColor: '#2f5dff',
   },
 });

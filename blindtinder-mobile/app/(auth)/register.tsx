@@ -19,21 +19,27 @@ export default function RegisterScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const onRegister = () => {
+  const onRegister = async () => {
     if (!fullName.trim() || !email.trim() || !password.trim()) {
       setError('Please fill all fields.');
       return;
     }
 
-    const result = register({ fullName, email, password });
-    if (!result.ok) {
-      setError(result.error ?? 'Could not create account');
-      return;
-    }
+    setIsSubmitting(true);
+    try {
+      const result = await register({ fullName, email, password });
+      if (!result.ok) {
+        setError(result.error ?? 'Could not create account');
+        return;
+      }
 
-    setError('');
-    router.replace('/(main)/(tabs)/profile');
+      setError('');
+      router.replace('/(main)/(tabs)/profile');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -68,8 +74,10 @@ export default function RegisterScreen() {
 
           {error ? <Text style={styles.error}>{error}</Text> : null}
 
-          <Pressable style={styles.primaryButton} onPress={onRegister}>
-            <Text style={styles.primaryButtonText}>Create and continue</Text>
+          <Pressable style={styles.primaryButton} onPress={onRegister} disabled={isSubmitting}>
+            <Text style={styles.primaryButtonText}>
+              {isSubmitting ? 'Creating...' : 'Create and continue'}
+            </Text>
           </Pressable>
         </View>
       </KeyboardAvoidingView>

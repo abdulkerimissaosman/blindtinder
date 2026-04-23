@@ -1,5 +1,5 @@
 import { useLocalSearchParams } from 'expo-router';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   FlatList,
   KeyboardAvoidingView,
@@ -12,13 +12,20 @@ import {
   View,
 } from 'react-native';
 
-import { useAppContext } from '@/contexts/app-context';
+import { Message, useAppContext } from '@/contexts/app-context';
+import { onTypingChanged, setTyping } from '@/lib/realtime';
 
 export default function ChatScreen() {
   const params = useLocalSearchParams<{ matchId: string }>();
   const routeMatchId = Array.isArray(params.matchId) ? params.matchId[0] : params.matchId;
-  const { currentUser, matches, sendMessage, getUserById } = useAppContext();
+  const { currentUser, matches, sendMessage, getUserById, getMatchMessages } = useAppContext();
   const [text, setText] = useState('');
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [sending, setSending] = useState(false);
+  const [isOtherTyping, setIsOtherTyping] = useState(false);
+  const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const match = useMemo(
     () => matches.find((m) => m.id === routeMatchId),
@@ -31,10 +38,119 @@ export default function ChatScreen() {
     return otherId ? getUserById(otherId) : undefined;
   }, [match, currentUser, getUserById]);
 
-  const onSend = () => {
+  useEffect(() => {
+    let active = true;
+
+    const loadMessages = async () => {
+      if (!routeMatchId) return;
+      setLoading(true);
+      setError(null);
+      try {
+        const nextMessages = await getMatchMessages(routeMatchId);
+        if (active) {
+          setMessages(nextMessages);
+        }
+      } catch (loadError) {
+        if (active) {
+          const message = loadError instanceof Error ? loadError.message : 'Could not load chat messages.';
+          setError(message);
+        }
+      } finally {
+        if (active) {
+          setLoading(false);
+        }
+      }
+    };
+
+    void loadMessages();
+
+    return () => {
+      active = false;
+    };
+  }, [getMatchMessages, routeMatchId]);
+
+  useEffect(() => {
+    setMessages(match?.messages ?? []);
+    if (match) {
+      setLoading(false);
+      setError(null);
+    }
+  }, [match]);
+
+  useEffect(() => {
+    if (!routeMatchId) {
+      return;
+    }
+
+    const stopTypingListener = onTypingChanged((event) => {
+      if (event.matchId !== routeMatchId) {
+        return;
+      }
+
+      if (event.userId === currentUser?.id) {
+        return;
+      }
+
+      setIsOtherTyping(event.isTyping);
+    });
+
+    return () => {
+      stopTypingListener();
+      setIsOtherTyping(false);
+    };
+  }, [currentUser?.id, routeMatchId]);
+
+  const updateTyping = (value: string) => {
+    setText(value);
+
+    if (!routeMatchId) {
+      return;
+    }
+
+    setTyping(routeMatchId, value.trim().length > 0);
+
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+    }
+
+    if (value.trim().length === 0) {
+      setTyping(routeMatchId, false);
+      return;
+    }
+
+    typingTimeoutRef.current = setTimeout(() => {
+      setTyping(routeMatchId, false);
+    }, 1000);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
+
+      if (routeMatchId) {
+        setTyping(routeMatchId, false);
+      }
+    };
+  }, [routeMatchId]);
+
+  const onSend = async () => {
     if (!routeMatchId || !text.trim()) return;
-    sendMessage(routeMatchId, text);
-    setText('');
+    setSending(true);
+    setError(null);
+    try {
+      await sendMessage(routeMatchId, text);
+      const nextMessages = await getMatchMessages(routeMatchId);
+      setMessages(nextMessages);
+      setText('');
+      setTyping(routeMatchId, false);
+    } catch (sendError) {
+      const message = sendError instanceof Error ? sendError.message : 'Could not send message.';
+      setError(message);
+    } finally {
+      setSending(false);
+    }
   };
 
   if (!match) {
@@ -53,9 +169,10 @@ export default function ChatScreen() {
         style={styles.container}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <Text style={styles.header}>Chat with {otherUser?.fullName ?? 'your match'}</Text>
+        {isOtherTyping ? <Text style={styles.typing}>{otherUser?.fullName ?? 'Your match'} is typing...</Text> : null}
 
         <FlatList
-          data={match.messages}
+          data={messages}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.messagesList}
           renderItem={({ item }) => {
@@ -66,18 +183,25 @@ export default function ChatScreen() {
               </View>
             );
           }}
-          ListEmptyComponent={<Text style={styles.empty}>Say hi to start the conversation.</Text>}
+          ListEmptyComponent={
+            <Text style={styles.empty}>
+              {loading ? 'Loading chat...' : error ? `Could not load messages: ${error}` : 'Say hi to start the conversation.'}
+            </Text>
+          }
         />
+
+        {error && !loading ? <Text style={styles.error}>{error}</Text> : null}
 
         <View style={styles.composer}>
           <TextInput
             style={styles.input}
             placeholder="Type a message"
             value={text}
-            onChangeText={setText}
+            onChangeText={updateTyping}
+            onBlur={() => routeMatchId && setTyping(routeMatchId, false)}
           />
-          <Pressable style={styles.sendButton} onPress={onSend}>
-            <Text style={styles.sendText}>Send</Text>
+          <Pressable style={styles.sendButton} onPress={onSend} disabled={sending}>
+            <Text style={styles.sendText}>{sending ? 'Sending...' : 'Send'}</Text>
           </Pressable>
         </View>
       </KeyboardAvoidingView>
@@ -157,5 +281,16 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  error: {
+    color: '#b3261e',
+    paddingHorizontal: 16,
+    paddingBottom: 8,
+  },
+  typing: {
+    paddingHorizontal: 16,
+    paddingTop: 4,
+    color: '#4a5889',
+    fontStyle: 'italic',
   },
 });

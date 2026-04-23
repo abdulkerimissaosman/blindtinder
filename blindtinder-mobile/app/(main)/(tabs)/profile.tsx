@@ -48,6 +48,7 @@ export default function ProfileScreen() {
   const [maxPreferredAge, setMaxPreferredAge] = useState(initial.maxPreferredAge);
   const [disabilities, setDisabilities] = useState<DisabilityTag[]>(initial.disabilities);
   const [saved, setSaved] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
 
   const toggleTag = (tag: DisabilityTag) => {
     setDisabilities((prev) => {
@@ -58,18 +59,23 @@ export default function ProfileScreen() {
     });
   };
 
-  const onSave = () => {
-    updateCurrentUserProfile({
-      fullName,
-      age: Number(age) || 18,
-      city,
-      bio,
-      disabilities: disabilities.length ? disabilities : ['other'],
-      accessibilityNeeds,
-      minPreferredAge: Number(minPreferredAge) || 18,
-      maxPreferredAge: Number(maxPreferredAge) || 99,
-    });
-    setSaved('Profile saved.');
+  const onSave = async () => {
+    setIsSaving(true);
+    try {
+      await updateCurrentUserProfile({
+        fullName,
+        age: Number(age) || 18,
+        city,
+        bio,
+        disabilities: disabilities.length ? disabilities : ['other'],
+        accessibilityNeeds,
+        minPreferredAge: Number(minPreferredAge) || 18,
+        maxPreferredAge: Number(maxPreferredAge) || 99,
+      });
+      setSaved('Profile saved.');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const onLogout = () => {
@@ -135,8 +141,8 @@ export default function ProfileScreen() {
 
         {saved ? <Text style={styles.saved}>{saved}</Text> : null}
 
-        <Pressable style={styles.primaryButton} onPress={onSave}>
-          <Text style={styles.primaryButtonText}>Save profile</Text>
+        <Pressable style={styles.primaryButton} onPress={onSave} disabled={isSaving}>
+          <Text style={styles.primaryButtonText}>{isSaving ? 'Saving...' : 'Save profile'}</Text>
         </Pressable>
 
         <Pressable style={styles.secondaryButton} onPress={onLogout}>

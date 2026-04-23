@@ -1,4 +1,24 @@
-import React, { createContext, useContext, useMemo, useState } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+
+import {
+  createSwipe,
+  getDiscovery,
+  getMe,
+  getMatches,
+  getMatchMessages as backendGetMatchMessages,
+  isBackendConfigured,
+  postAuth,
+  sendMatchMessage,
+  updateMe,
+} from '@/lib/backend';
+import {
+  connectRealtime,
+  disconnectRealtime,
+  joinMatchRoom,
+  onMatchCreated,
+  onMessageCreated,
+} from '@/lib/realtime';
 
 export type DisabilityTag =
   | 'visual'
@@ -68,19 +88,21 @@ type ProfileInput = Pick<
 >;
 
 type AppContextValue = {
+  isBootstrapping: boolean;
   currentUser: UserProfile | null;
   users: UserProfile[];
   swipes: SwipeRecord[];
   matches: Match[];
-  login: (payload: AuthInput) => { ok: boolean; error?: string };
-  register: (payload: RegisterInput) => { ok: boolean; error?: string };
+  login: (payload: AuthInput) => Promise<{ ok: boolean; error?: string }>;
+  register: (payload: RegisterInput) => Promise<{ ok: boolean; error?: string }>;
   logout: () => void;
-  updateCurrentUserProfile: (payload: ProfileInput) => void;
-  getDiscoveryUsers: () => UserProfile[];
-  swipe: (toUserId: string, action: SwipeAction) => { newMatchId?: string };
-  getCurrentUserMatches: () => Match[];
+  updateCurrentUserProfile: (payload: ProfileInput) => Promise<void> | void;
+  getDiscoveryUsers: () => Promise<UserProfile[]> | UserProfile[];
+  swipe: (toUserId: string, action: SwipeAction) => Promise<{ newMatchId?: string }> | { newMatchId?: string };
+  getCurrentUserMatches: () => Promise<Match[]> | Match[];
+  getMatchMessages: (matchId: string) => Promise<Message[]> | Message[];
   getUserById: (id: string) => UserProfile | undefined;
-  sendMessage: (matchId: string, text: string) => void;
+  sendMessage: (matchId: string, text: string) => Promise<void> | void;
 };
 
 const initialUsers: UserProfile[] = [
@@ -126,6 +148,7 @@ const initialUsers: UserProfile[] = [
 ];
 
 const AppContext = createContext<AppContextValue | null>(null);
+const SESSION_TOKEN_STORAGE_KEY = 'blindtinder.sessionToken';
 
 function makeId(prefix: string): string {
   return `${prefix}-${Math.random().toString(36).slice(2, 10)}`;
@@ -135,9 +158,27 @@ function normalizePair(a: string, b: string): [string, string] {
   return a < b ? [a, b] : [b, a];
 }
 
+function normalizeUserProfile(user: Partial<UserProfile> & { id: string; email: string; fullName: string }): UserProfile {
+  return {
+    id: user.id,
+    email: user.email,
+    password: user.password ?? '',
+    fullName: user.fullName,
+    age: typeof user.age === 'number' ? user.age : 25,
+    city: user.city ?? '',
+    bio: user.bio ?? '',
+    disabilities: Array.isArray(user.disabilities) ? user.disabilities : ['other'],
+    accessibilityNeeds: user.accessibilityNeeds ?? '',
+    minPreferredAge: typeof user.minPreferredAge === 'number' ? user.minPreferredAge : 22,
+    maxPreferredAge: typeof user.maxPreferredAge === 'number' ? user.maxPreferredAge : 35,
+  };
+}
+
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [users, setUsers] = useState<UserProfile[]>(initialUsers);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [sessionToken, setSessionToken] = useState<string | null>(null);
+  const [isBootstrapping, setIsBootstrapping] = useState(true);
   const [swipes, setSwipes] = useState<SwipeRecord[]>([]);
   const [matches, setMatches] = useState<Match[]>([]);
 
@@ -146,7 +187,156 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     [users, currentUserId]
   );
 
-  const login = ({ email, password }: AuthInput) => {
+  useEffect(() => {
+    let active = true;
+
+    const restoreSession = async () => {
+      try {
+        let token: string | null = null;
+        try {
+          token = await AsyncStorage.getItem(SESSION_TOKEN_STORAGE_KEY);
+        } catch (storageError) {
+          // AsyncStorage native module not available in this environment
+          console.warn('AsyncStorage unavailable, using in-memory only:', storageError);
+          token = null;
+        }
+
+        if (!token) {
+          return;
+        }
+
+        const user = normalizeUserProfile(await getMe<UserProfile>(token));
+        if (!active) {
+          return;
+        }
+
+        setSessionToken(token);
+        setUsers((prev) => {
+          const others = prev.filter((item) => item.id !== user.id);
+          return [...others, user];
+        });
+        setCurrentUserId(user.id);
+      } catch {
+        try {
+          await AsyncStorage.removeItem(SESSION_TOKEN_STORAGE_KEY);
+        } catch (storageError) {
+          // AsyncStorage removal failed, continue anyway
+          console.warn('AsyncStorage removeItem failed:', storageError);
+        }
+        if (!active) {
+          return;
+        }
+        setSessionToken(null);
+        setCurrentUserId(null);
+      } finally {
+        if (active) {
+          setIsBootstrapping(false);
+        }
+      }
+    };
+
+    void restoreSession();
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!sessionToken || !currentUserId) {
+      disconnectRealtime();
+      return;
+    }
+
+    const socket = connectRealtime(sessionToken);
+
+    const stopMatchCreated = onMatchCreated(({ match }) => {
+      setMatches((prev) => {
+        if (prev.some((item) => item.id === match.id)) {
+          return prev;
+        }
+
+        return [
+          {
+            ...match,
+            messages: [],
+          },
+          ...prev,
+        ];
+      });
+    });
+
+    const stopMessageCreated = onMessageCreated(({ matchId, message }) => {
+      setMatches((prev) =>
+        prev.map((match) => {
+          if (match.id !== matchId) {
+            return match;
+          }
+
+          if (match.messages.some((item) => item.id === message.id)) {
+            return match;
+          }
+
+          return {
+            ...match,
+            messages: [...match.messages, message],
+          };
+        })
+      );
+    });
+
+    socket.on('connect_error', (error) => {
+      console.warn('Realtime connection error:', error.message);
+    });
+
+    return () => {
+      stopMatchCreated();
+      stopMessageCreated();
+      socket.off('connect_error');
+      disconnectRealtime();
+    };
+  }, [currentUserId, sessionToken]);
+
+  useEffect(() => {
+    if (!sessionToken || !currentUserId || matches.length === 0) {
+      return;
+    }
+
+    for (const match of matches) {
+      joinMatchRoom(match.id);
+    }
+  }, [currentUserId, matches, sessionToken]);
+
+  const login = async ({ email, password }: AuthInput) => {
+    if (isBackendConfigured()) {
+      try {
+        const response = await postAuth<UserProfile>('/auth/login', { email, password });
+        const token = response.token ?? response.data?.token ?? null;
+        const user = response.user ?? response.data?.user ?? null;
+
+        if (!token || !user) {
+          return { ok: false, error: 'Invalid login response from server.' };
+        }
+
+        try {
+          await AsyncStorage.setItem(SESSION_TOKEN_STORAGE_KEY, token);
+        } catch (storageError) {
+          console.warn('AsyncStorage setItem failed:', storageError);
+        }
+        setSessionToken(token);
+        const normalizedUser = normalizeUserProfile(user);
+
+        setUsers((prev) => {
+          const others = prev.filter((item) => item.id !== normalizedUser.id);
+          return [...others, normalizedUser];
+        });
+        setCurrentUserId(normalizedUser.id);
+        return { ok: true };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : 'Login failed.' };
+      }
+    }
+
     const found = users.find((u) => u.email.toLowerCase() === email.toLowerCase().trim());
     if (!found) {
       return { ok: false, error: 'No account found for this email.' };
@@ -154,11 +344,46 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (found.password !== password) {
       return { ok: false, error: 'Incorrect password.' };
     }
+    try {
+      await AsyncStorage.removeItem(SESSION_TOKEN_STORAGE_KEY);
+    } catch (storageError) {
+      console.warn('AsyncStorage removeItem failed:', storageError);
+    }
     setCurrentUserId(found.id);
+    setSessionToken(null);
     return { ok: true };
   };
 
-  const register = ({ email, password, fullName }: RegisterInput) => {
+  const register = async ({ email, password, fullName }: RegisterInput) => {
+    if (isBackendConfigured()) {
+      try {
+        const response = await postAuth<UserProfile>('/auth/register', { email, password, fullName });
+        const token = response.token ?? response.data?.token ?? null;
+        const user = response.user ?? response.data?.user ?? null;
+
+        if (!token || !user) {
+          return { ok: false, error: 'Invalid register response from server.' };
+        }
+
+        try {
+          await AsyncStorage.setItem(SESSION_TOKEN_STORAGE_KEY, token);
+        } catch (storageError) {
+          console.warn('AsyncStorage setItem failed:', storageError);
+        }
+        setSessionToken(token);
+        const normalizedUser = normalizeUserProfile(user);
+
+        setUsers((prev) => {
+          const others = prev.filter((item) => item.id !== normalizedUser.id);
+          return [...others, normalizedUser];
+        });
+        setCurrentUserId(normalizedUser.id);
+        return { ok: true };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : 'Registration failed.' };
+      }
+    }
+
     const exists = users.some((u) => u.email.toLowerCase() === email.toLowerCase().trim());
     if (exists) {
       return { ok: false, error: 'Email is already registered.' };
@@ -178,17 +403,47 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       maxPreferredAge: 35,
     };
 
+    try {
+      await AsyncStorage.removeItem(SESSION_TOKEN_STORAGE_KEY);
+    } catch (storageError) {
+      console.warn('AsyncStorage removeItem failed:', storageError);
+    }
     setUsers((prev) => [...prev, newUser]);
     setCurrentUserId(newUser.id);
+    setSessionToken(null);
     return { ok: true };
   };
 
   const logout = () => {
+    void AsyncStorage.removeItem(SESSION_TOKEN_STORAGE_KEY).catch((error) => {
+      console.warn('AsyncStorage removeItem failed during logout:', error);
+    });
     setCurrentUserId(null);
+    setSessionToken(null);
   };
 
-  const updateCurrentUserProfile = (payload: ProfileInput) => {
+  const updateCurrentUserProfile = async (payload: ProfileInput) => {
     if (!currentUserId) return;
+
+    if (sessionToken) {
+      try {
+        const updated = await updateMe<UserProfile>(sessionToken, payload);
+        setUsers((prev) =>
+          prev.map((u) =>
+            u.id === currentUserId
+              ? {
+                  ...u,
+                  ...updated,
+                }
+              : u
+          )
+        );
+        return;
+      } catch {
+        // Fall back to local state if the backend is unavailable.
+      }
+    }
+
     setUsers((prev) =>
       prev.map((u) =>
         u.id === currentUserId
@@ -201,9 +456,47 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     );
   };
 
-  const getCurrentUserMatches = () => {
+  const getCurrentUserMatches = async () => {
     if (!currentUserId) return [];
+
+    if (sessionToken) {
+      try {
+        const nextMatches = await getMatches<Match>(sessionToken);
+        setMatches(nextMatches);
+        return nextMatches;
+      } catch {
+        // Fall back to local state.
+      }
+    }
+
     return matches.filter((m) => m.userIds.includes(currentUserId));
+  };
+
+  const getMatchMessages = async (matchId: string) => {
+    const localMatch = matches.find((match) => match.id === matchId);
+
+    if (sessionToken) {
+      try {
+        const messages = await backendGetMatchMessages<Message>(sessionToken, matchId);
+        if (localMatch) {
+          setMatches((prev) =>
+            prev.map((match) =>
+              match.id === matchId
+                ? {
+                    ...match,
+                    messages,
+                  }
+                : match
+            )
+          );
+        }
+        return messages;
+      } catch {
+        // Fall back to local state.
+      }
+    }
+
+    return localMatch?.messages ?? [];
   };
 
   const hasMatchBetween = (a: string, b: string) => {
@@ -214,8 +507,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     });
   };
 
-  const getDiscoveryUsers = () => {
+  const getDiscoveryUsers = async () => {
     if (!currentUser) return [];
+
+    if (sessionToken) {
+      try {
+        const remoteUsers = await getDiscovery<UserProfile>(sessionToken);
+        return remoteUsers.map((user) => normalizeUserProfile(user));
+      } catch {
+        // Fall back to local state.
+      }
+    }
 
     const alreadySwiped = new Set(
       swipes.filter((s) => s.fromUserId === currentUser.id).map((s) => s.toUserId)
@@ -232,8 +534,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     });
   };
 
-  const swipe = (toUserId: string, action: SwipeAction) => {
+  const swipe = async (toUserId: string, action: SwipeAction) => {
     if (!currentUserId) return {};
+
+    if (sessionToken) {
+      try {
+        return await createSwipe<{ newMatchId?: string }>(sessionToken, {
+          toUserId,
+          action,
+        });
+      } catch {
+        // Fall back to local state.
+      }
+    }
 
     const newSwipe: SwipeRecord = {
       fromUserId: currentUserId,
@@ -270,8 +583,27 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const getUserById = (id: string) => users.find((u) => u.id === id);
 
-  const sendMessage = (matchId: string, text: string) => {
+  const sendMessage = async (matchId: string, text: string) => {
     if (!currentUserId || !text.trim()) return;
+
+    if (sessionToken) {
+      try {
+        const savedMessage = await sendMatchMessage<Message>(sessionToken, matchId, { text });
+        setMatches((prev) =>
+          prev.map((match) =>
+            match.id === matchId
+              ? {
+                  ...match,
+                  messages: [...match.messages, savedMessage],
+                }
+              : match
+          )
+        );
+        return;
+      } catch {
+        // Fall back to local state.
+      }
+    }
 
     setMatches((prev) =>
       prev.map((m) => {
@@ -294,6 +626,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   };
 
   const value: AppContextValue = {
+    isBootstrapping,
     currentUser,
     users,
     swipes,
@@ -305,6 +638,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     getDiscoveryUsers,
     swipe,
     getCurrentUserMatches,
+    getMatchMessages,
     getUserById,
     sendMessage,
   };

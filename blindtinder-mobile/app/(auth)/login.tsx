@@ -18,15 +18,21 @@ export default function LoginScreen() {
   const [email, setEmail] = useState('sara@example.com');
   const [password, setPassword] = useState('password123');
   const [error, setError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const onLogin = () => {
-    const result = login({ email, password });
-    if (!result.ok) {
-      setError(result.error ?? 'Login failed');
-      return;
+  const onLogin = async () => {
+    setIsSubmitting(true);
+    try {
+      const result = await login({ email, password });
+      if (!result.ok) {
+        setError(result.error ?? 'Login failed');
+        return;
+      }
+      setError('');
+      router.replace('/(main)/(tabs)/discover');
+    } finally {
+      setIsSubmitting(false);
     }
-    setError('');
-    router.replace('/(main)/(tabs)/discover');
   };
 
   return (
@@ -56,8 +62,8 @@ export default function LoginScreen() {
 
           {error ? <Text style={styles.error}>{error}</Text> : null}
 
-          <Pressable style={styles.primaryButton} onPress={onLogin}>
-            <Text style={styles.primaryButtonText}>Log in</Text>
+          <Pressable style={styles.primaryButton} onPress={onLogin} disabled={isSubmitting}>
+            <Text style={styles.primaryButtonText}>{isSubmitting ? 'Logging in...' : 'Log in'}</Text>
           </Pressable>
 
           <Link href="/(auth)/register" style={styles.link}>
